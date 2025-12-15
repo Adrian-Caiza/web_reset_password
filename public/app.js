@@ -3,85 +3,75 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Referencias al DOM
-const form = document.getElementById('resetForm');
 const submitBtn = document.getElementById('submitBtn');
 const errorDiv = document.getElementById('error');
 const successDiv = document.getElementById('success');
 const inputs = document.querySelectorAll('input');
 
-// 1. BLOQUEAR EL FORMULARIO AL INICIO (Para evitar el error "Auth session missing")
-submitBtn.disabled = true;
-inputs.forEach(input => input.disabled = true);
-submitBtn.innerHTML = '<span class="loader"></span> Verificando enlace...';
+// Función para mostrar errores en pantalla (útil para debug en móvil)
+function showError(msg) {
+    errorDiv.textContent = msg;
+    errorDiv.style.display = 'block';
+    submitBtn.innerHTML = 'Error de Sesión';
+}
 
-// 2. ESCUCHAR EL ESTADO DE LA SESIÓN
+// Lógica Principal
 supabase.auth.onAuthStateChange(async (event, session) => {
-    console.log("Evento de Auth:", event); // Para depuración
-
-    // Si detectamos recuperación o inicio de sesión exitoso, ACTIVAMOS el formulario
-    if (event === 'PASSWORD_RECOVERY' || event === 'SIGNED_IN' || session) {
+    console.log("Evento Auth:", event); 
+    
+    // Si obtenemos sesión (sea por recuperación o login), desbloqueamos
+    if (session) {
         submitBtn.disabled = false;
-        inputs.forEach(input => input.disabled = false);
+        inputs.forEach(i => i.disabled = false);
         submitBtn.innerHTML = 'Restablecer Contraseña';
-    } else {
-        // Si no hay sesión, mantenemos bloqueado (probablemente el link expiró)
-        // No mostramos error aún, damos un momento por si la carga es lenta.
+        
+        // Ocultar mensaje de error si había uno por timeout
+        errorDiv.style.display = 'none';
     }
 });
 
-// 3. MANEJAR EL ENVÍO DEL FORMULARIO
-form.addEventListener('submit', async (e) => {
+// Manejo del formulario (Igual que antes)
+document.getElementById('resetForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     errorDiv.style.display = 'none';
-    successDiv.style.display = 'none';
-
+    
     const password = document.getElementById('password').value;
     const confirmPassword = document.getElementById('confirmPassword').value;
 
     if (password !== confirmPassword) {
-        showError('Las contraseñas no coinciden');
+        errorDiv.textContent = 'Las contraseñas no coinciden';
+        errorDiv.style.display = 'block';
         return;
     }
 
-    // UI: Mostrar carga
-    const originalBtnText = submitBtn.innerHTML;
     submitBtn.disabled = true;
-    submitBtn.innerHTML = 'Actualizando...';
+    submitBtn.innerHTML = 'Guardando...';
 
     try {
-        // Intentar actualizar
-        const { data, error } = await supabase.auth.updateUser({
-            password: password
-        });
-
+        const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
-
-        // Éxito
-        successDiv.textContent = '¡Contraseña actualizada! Ya puedes iniciar sesión en la App.';
-        successDiv.style.display = 'block';
-        form.reset();
         
-    } catch (error) {
-        console.error(error);
-        showError(error.message || 'Error al actualizar. Intenta solicitar un nuevo correo.');
+        successDiv.textContent = '¡Listo! Contraseña cambiada.';
+        successDiv.style.display = 'block';
+        document.getElementById('resetForm').reset();
+    } catch (err) {
+        showError(err.message);
     } finally {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = 'Restablecer Contraseña';
+        if(successDiv.style.display === 'none') submitBtn.innerHTML = 'Restablecer Contraseña';
     }
 });
 
-function showError(msg) {
-    errorDiv.textContent = msg;
-    errorDiv.style.display = 'block';
-}
-
-// 4. CHECK DE SEGURIDAD EXTRA
-// Si pasan 4 segundos y no hay sesión, avisamos al usuario.
-setTimeout(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session && submitBtn.disabled) {
-        showError('No se detectó una sesión válida. El enlace puede haber expirado o ya fue usado. Solicita uno nuevo desde la App.');
-        submitBtn.innerHTML = 'Enlace Inválido';
+// Diagnóstico Visual en el celular
+// Esto imprimirá la URL en la pantalla si falla, para que sepas qué está llegando mal.
+setTimeout(() => {
+    if (submitBtn.disabled) {
+        const urlParams = window.location.hash || window.location.search;
+        if (!urlParams) {
+              showError('Error: El enlace llegó vacío (sin token). Revisa la configuración de redirección en Supabase.');
+        } else {
+             // Si hay params pero no hay sesión, supabase.js aun está procesando o falló
+              console.log("Params detectados:", urlParams);
+        }
     }
-}, 4000);
+}, 5000);
