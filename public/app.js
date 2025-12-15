@@ -13,85 +13,106 @@ const form = document.getElementById('resetForm');
 // 1. BLOQUEAR AL INICIO
 submitBtn.disabled = true;
 inputs.forEach(i => i.disabled = true);
-submitBtn.innerHTML = '<span class="loader"></span> Verificando...';
+submitBtn.innerHTML = '<span class="loader"></span> Analizando enlace...';
 
 function showError(msg) {
-    errorDiv.textContent = msg;
+    errorDiv.innerHTML = msg; // Usamos innerHTML para permitir saltos de línea
     errorDiv.style.display = 'block';
-    submitBtn.innerHTML = 'Error de Enlace';
+    submitBtn.innerHTML = 'Error Fatal';
     submitBtn.disabled = true;
 }
 
-// 2. ESCUCHAR SESIÓN (Funciona con Hash # y con Query Params ?)
+function enableForm() {
+    submitBtn.disabled = false;
+    inputs.forEach(i => i.disabled = false);
+    submitBtn.innerHTML = 'Restablecer Contraseña';
+    errorDiv.style.display = 'none';
+}
+
+// 2. FUNCIÓN DE DIAGNÓSTICO E INICIO
+async function init() {
+    console.log("Iniciando diagnóstico...");
+    
+    // Verificar si hay sesión existente primero
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+    if (sessionError) {
+        console.error("Error de sesión:", sessionError);
+        showError(`Error obteniendo sesión: <br/> ${sessionError.message}`);
+        return;
+    }
+
+    if (session) {
+        console.log("¡Sesión detectada!", session.user.email);
+        enableForm();
+        return;
+    }
+
+    // Si no hay sesión, miramos la URL
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const errorDescription = params.get('error_description');
+
+    if (errorDescription) {
+        // Supabase ya nos mandó un error en la URL
+        showError(`Supabase reporta error: <br/> ${errorDescription}`);
+        return;
+    }
+
+    if (code) {
+        console.log("Código PKCE detectado, esperando intercambio...");
+        // A veces el getSession tarda un poco en procesar el código.
+        // Esperamos el evento de cambio de estado.
+    } else {
+        // Chequeo de hash (método antiguo)
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token')) {
+            console.log("Hash detectado, intentando recuperar...");
+        } else {
+            showError('No se encontró ningún código de seguridad en el enlace.<br>Asegúrate de copiar el enlace completo.');
+        }
+    }
+}
+
+// 3. LISTENER DE EVENTOS (Aquí ocurre la magia)
 supabase.auth.onAuthStateChange(async (event, session) => {
     console.log("Evento Auth:", event);
-    
     if (session) {
-        // ¡Éxito! Sesión recuperada
-        submitBtn.disabled = false;
-        inputs.forEach(i => i.disabled = false);
-        submitBtn.innerHTML = 'Restablecer Contraseña';
-        errorDiv.style.display = 'none';
+        enableForm();
+    } else if (event === 'SIGNED_OUT') {
+        // A veces pasa esto si el token es inválido
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('code')) {
+             // Si hay código pero nos deslogueó, es que falló el intercambio
+             // Intentamos ver si hay un error en la consola o forzamos un mensaje
+             setTimeout(() => {
+                 if(submitBtn.disabled) showError('Error: El código ha expirado o ya fue usado. <br>SOLUCIÓN: Pide un nuevo correo y NO hagas clic. Copia y pega el link.');
+             }, 3000);
+        }
     }
 });
 
-// 3. ENVÍO DEL FORMULARIO
+// Ejecutar inicio
+init();
+
+// 4. MANEJAR EL ENVÍO (Igual que antes)
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorDiv.style.display = 'none';
-    
     const password = document.getElementById('password').value;
     const confirmPassword = document.getElementById('confirmPassword').value;
 
-    if (password !== confirmPassword) {
-        errorDiv.textContent = 'Las contraseñas no coinciden';
-        errorDiv.style.display = 'block';
-        return;
-    }
-    if (password.length < 6) {
-        errorDiv.textContent = 'Mínimo 6 caracteres';
-        errorDiv.style.display = 'block';
-        return;
-    }
-
-    submitBtn.disabled = true;
+    if (password !== confirmPassword) return showError('Las contraseñas no coinciden');
+    
     submitBtn.innerHTML = 'Guardando...';
-
-    try {
-        const { error } = await supabase.auth.updateUser({ password });
-        if (error) throw error;
-        
+    const { error } = await supabase.auth.updateUser({ password });
+    
+    if (error) {
+        showError(error.message);
+        submitBtn.innerHTML = 'Reintentar';
+    } else {
         successDiv.textContent = '¡Contraseña actualizada!';
         successDiv.style.display = 'block';
         form.reset();
-    } catch (err) {
-        console.error(err);
-        errorDiv.textContent = err.message || 'Error al actualizar.';
-        errorDiv.style.display = 'block';
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = 'Reintentar';
     }
 });
-
-// 4. DIAGNÓSTICO MEJORADO (Espera 6 segundos y revisa todo)
-setTimeout(() => {
-    // Solo si sigue bloqueado (significa que onAuthStateChange no se disparó)
-    if (submitBtn.disabled && submitBtn.innerHTML.includes('Verificando')) {
-        
-        const hash = window.location.hash;   // Token viejo (#access_token)
-        const search = window.location.search; // Código nuevo (?code=)
-
-        if (!hash && !search) {
-              showError('Error Crítico: El enlace llegó limpio (sin token ni código). Supabase limpió la URL. Verifica las Redirect URLs.');
-        } else if (search) {
-             // Si hay ?code= pero no hay sesión, es que el código expiró o supabase-js falló
-              showError('Detectado código PKCE, pero expiró o es inválido. Solicita un NUEVO correo (no reuses el anterior).');
-        } else {
-              showError('El enlace ha expirado. Solicita uno nuevo.');
-        }
-        
-        // Imprimir en consola para debug
-        console.log("Hash:", hash);
-        console.log("Search:", search);
-    }
-}, 6000); // Aumentamos a 6 segundos para dar tiempo en móviles
