@@ -1,37 +1,45 @@
+// TUS CREDENCIALES (Las que vi en tu archivo son correctas)
 const SUPABASE_URL = 'https://wboxzvxjaowfmtauadjk.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indib3h6dnhqYW93Zm10YXVhZGprIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUzMTU2MjQsImV4cCI6MjA4MDg5MTYyNH0.mZhz3fR5drR3zONusA11p0i1CPYjIX717s66XHcFW9I';
 
+// Inicializar Supabase
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Referencias del DOM
 const submitBtn = document.getElementById('submitBtn');
 const errorDiv = document.getElementById('error');
 const successDiv = document.getElementById('success');
 const inputs = document.querySelectorAll('input');
+const form = document.getElementById('resetForm');
 
-// Función para mostrar errores en pantalla (útil para debug en móvil)
+// 1. BLOQUEAR TODO AL INICIO (Crucial para evitar "Auth session missing")
+submitBtn.disabled = true;
+inputs.forEach(i => i.disabled = true);
+submitBtn.innerHTML = '<span class="loader"></span> Verificando enlace...';
+
+// Función auxiliar de error
 function showError(msg) {
     errorDiv.textContent = msg;
     errorDiv.style.display = 'block';
-    submitBtn.innerHTML = 'Error de Sesión';
+    submitBtn.innerHTML = 'Enlace Inválido';
+    submitBtn.disabled = true; // Mantener bloqueado si hay error
 }
 
-// Lógica Principal
+// 2. ESCUCHAR SI LLEGA LA SESIÓN
 supabase.auth.onAuthStateChange(async (event, session) => {
-    console.log("Evento Auth:", event); 
+    console.log("Evento Auth detectado:", event); 
     
-    // Si obtenemos sesión (sea por recuperación o login), desbloqueamos
+    // Si Supabase encuentra el token y recupera la sesión:
     if (session) {
         submitBtn.disabled = false;
         inputs.forEach(i => i.disabled = false);
         submitBtn.innerHTML = 'Restablecer Contraseña';
-        
-        // Ocultar mensaje de error si había uno por timeout
-        errorDiv.style.display = 'none';
+        errorDiv.style.display = 'none'; // Limpiar errores previos
     }
 });
 
-// Manejo del formulario (Igual que antes)
-document.getElementById('resetForm').addEventListener('submit', async (e) => {
+// 3. MANEJAR EL ENVÍO
+form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errorDiv.style.display = 'none';
     
@@ -44,6 +52,13 @@ document.getElementById('resetForm').addEventListener('submit', async (e) => {
         return;
     }
 
+    if (password.length < 6) {
+        errorDiv.textContent = 'La contraseña debe tener al menos 6 caracteres';
+        errorDiv.style.display = 'block';
+        return;
+    }
+
+    // Bloquear mientras se guarda
     submitBtn.disabled = true;
     submitBtn.innerHTML = 'Guardando...';
 
@@ -51,27 +66,29 @@ document.getElementById('resetForm').addEventListener('submit', async (e) => {
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
         
-        successDiv.textContent = '¡Listo! Contraseña cambiada.';
+        successDiv.textContent = '¡Listo! Contraseña actualizada correctamente.';
         successDiv.style.display = 'block';
-        document.getElementById('resetForm').reset();
+        form.reset();
+        
     } catch (err) {
-        showError(err.message);
-    } finally {
+        console.error(err);
+        // Si sale "Auth session missing" aquí, es porque la sesión se perdió
+        errorDiv.textContent = err.message || 'Error al actualizar.';
+        errorDiv.style.display = 'block';
         submitBtn.disabled = false;
-        if(successDiv.style.display === 'none') submitBtn.innerHTML = 'Restablecer Contraseña';
+        submitBtn.innerHTML = 'Intentar de nuevo';
     }
 });
 
-// Diagnóstico Visual en el celular
-// Esto imprimirá la URL en la pantalla si falla, para que sepas qué está llegando mal.
+// 4. CHECK DE SEGURIDAD (Timeout)
 setTimeout(() => {
-    if (submitBtn.disabled) {
-        const urlParams = window.location.hash || window.location.search;
-        if (!urlParams) {
-              showError('Error: El enlace llegó vacío (sin token). Revisa la configuración de redirección en Supabase.');
+    // Si pasaron 4 segundos y el botón sigue diciendo "Verificando..." es que falló.
+    if (submitBtn.disabled && submitBtn.innerHTML.includes('Verificando')) {
+        const hash = window.location.hash;
+        if (!hash || hash.length < 10) {
+             showError('Error: El enlace está roto o incompleto. Revisa las "Redirect URLs" en Supabase.');
         } else {
-             // Si hay params pero no hay sesión, supabase.js aun está procesando o falló
-              console.log("Params detectados:", urlParams);
+             showError('El enlace ha expirado o ya fue utilizado. Solicita uno nuevo.');
         }
     }
-}, 5000);
+}, 4000);
