@@ -4,98 +4,82 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Referencias
 const submitBtn = document.getElementById('submitBtn');
 const errorDiv = document.getElementById('error');
 const successDiv = document.getElementById('success');
 const inputs = document.querySelectorAll('input');
 const form = document.getElementById('resetForm');
 
-// CONSOLA EN PANTALLA (Para ver qué pasa realmente)
-const debugConsole = document.createElement('div');
-debugConsole.style.cssText = "background: #000; color: #0f0; padding: 10px; margin-top: 20px; border-radius: 8px; font-family: monospace; font-size: 11px; white-space: pre-wrap;";
-debugConsole.innerHTML = "--- CONSOLA DE DIAGNÓSTICO V5 (FORZADO) ---\n";
-document.querySelector('.card').appendChild(debugConsole);
-
-function log(msg) { debugConsole.innerHTML += `> ${msg}\n`; }
-function errorLog(msg) { debugConsole.innerHTML += `[ERROR] ${msg}\n`; debugConsole.style.border = "2px solid red"; }
-
-// Bloquear al inicio
+// Bloquear inicio
 submitBtn.disabled = true;
 inputs.forEach(i => i.disabled = true);
-submitBtn.innerHTML = 'Verificando Código...';
+submitBtn.innerHTML = '<span class="loader"></span> Verificando Token...';
 
 function enableForm() {
     submitBtn.disabled = false;
     inputs.forEach(i => i.disabled = false);
     submitBtn.innerHTML = 'Restablecer Contraseña';
-    log("¡ACCESO CONCEDIDO! Formulario desbloqueado.");
-    debugConsole.style.background = "#004400";
+    errorDiv.style.display = 'none';
 }
 
-// LÓGICA DE INTERCAMBIO MANUAL
-async function handleExchange() {
-    log("Analizando URL...");
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-
-    if (!code) {
-        errorLog("No hay código en la URL. ¿Enlace roto?");
-        submitBtn.innerHTML = "Enlace Vacío";
-        return;
-    }
-
-    log(`Código detectado: ${code.substring(0,6)}...`);
-    log("Intentando intercambio manual de código...");
-
-    // 1. INTENTO DE INTERCAMBIO OFICIAL
-    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-
-    if (error) {
-        errorLog(`Fallo el intercambio: ${error.message}`);
-        errorLog(`Nombre del error: ${error.name}`);
-        
-        // Si el error es PKCE, intentamos un truco sucio (Solo funciona en algunos configs)
-        if (error.message.includes("verifier") || error.message.includes("PKCE")) {
-             log("Detectado error de PKCE (Dispositivo cruzado).");
-             log("Esto ocurre porque iniciaste en la App y terminaste en Web.");
-        }
-        submitBtn.innerHTML = "Error de Validación";
-    } else if (data.session) {
-        log("¡Intercambio exitoso! Sesión creada.");
+// Lógica Universal (Detecta Hash o Sesión)
+supabase.auth.onAuthStateChange(async (event, session) => {
+    console.log("Evento Auth:", event);
+    
+    if (session) {
+        // ¡Tenemos sesión! (Implicit Flow la recupera automáticamente del Hash #)
         enableForm();
     } else {
-        // A veces no da error pero no da sesión (raro en manual)
-        // Intentamos ver si ya hay sesión global
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (sessionData.session) {
-            log("Sesión recuperada por otra vía.");
-            enableForm();
-        } else {
-            errorLog("El servidor aceptó el código pero no devolvió sesión.");
+        // Si no hay sesión inmediata, revisamos si hay error en la URL
+        const hash = window.location.hash;
+        if (hash && hash.includes('error_description')) {
+            const params = new URLSearchParams(hash.substring(1)); // Quitar el #
+            errorDiv.textContent = decodeURIComponent(params.get('error_description'));
+            errorDiv.style.display = 'block';
+            submitBtn.innerHTML = "Enlace Expirado";
         }
     }
-}
+});
 
-// Ejecutar
-handleExchange();
+// Timeout de seguridad
+setTimeout(() => {
+    if (submitBtn.disabled) {
+        // Si sigue bloqueado, es que no llegó el token #
+        const hash = window.location.hash;
+        if (!hash || hash.length < 10) {
+            errorDiv.textContent = 'Error: El enlace no contiene un token válido. Revisa que "Implicit Flow" esté activo en Supabase Dashboard.';
+        } else {
+            errorDiv.textContent = 'El enlace ha expirado o es inválido.';
+        }
+        errorDiv.style.display = 'block';
+        submitBtn.innerHTML = "Error de Enlace";
+    }
+}, 5000);
 
-// ENVÍO
+// Manejo del Envío
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const password = document.getElementById('password').value;
     const confirmPassword = document.getElementById('confirmPassword').value;
 
-    if (password !== confirmPassword) return log("Error: Passwords distintos");
+    if (password !== confirmPassword) {
+        errorDiv.textContent = 'Las contraseñas no coinciden';
+        errorDiv.style.display = 'block';
+        return;
+    }
 
+    submitBtn.disabled = true;
     submitBtn.innerHTML = 'Guardando...';
+
     const { error } = await supabase.auth.updateUser({ password });
-    
+
     if (error) {
-        errorLog("Error al guardar: " + error.message);
+        errorDiv.textContent = error.message;
+        errorDiv.style.display = 'block';
+        submitBtn.disabled = false;
         submitBtn.innerHTML = 'Reintentar';
     } else {
-        successDiv.textContent = '¡Listo! Contraseña cambiada.';
+        successDiv.textContent = '¡Listo! Contraseña actualizada.';
         successDiv.style.display = 'block';
         form.reset();
     }
